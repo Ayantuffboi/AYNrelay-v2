@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Connect</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="viewer">
+
+    <video
+        id="remote"
+        autoplay
+        playsinline
+        controls
+    ></video>
+
+    <div id="status">
+        Enter a code.
+    </div>
+
+</div>
+
+<script>
+
+const RELAY =
+    "wss://my-relay.ayan6-4.workers.dev";
+
+const code =
+    prompt("Enter the 8-character code:");
+
+if (!code || code.length !== 8) {
+
+    document.getElementById("status").textContent =
+        "Code must be exactly 8 characters.";
+
+    throw new Error("Invalid code.");
+}
+
+let ws;
+
+let pc = null;
+
+const remote =
+    document.getElementById("remote");
+
+const status =
+    document.getElementById("status");
+
+const iceServers = [
+    {
+        urls: [
+            "stun:stun.cloudflare.com:3478",
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302"
+        ]
+    }
+];
+
+function connect() {
+
+    ws = new WebSocket(
+        RELAY + "?code=" +
+        encodeURIComponent(code)
+    );
+
+    ws.onopen = () => {
+
+        status.textContent =
+            "Connected to relay.";
+
+        ws.send(JSON.stringify({
+            type: "client-register",
+            clientId: crypto.randomUUID()
+        }));
+    };
+
+    ws.onmessage = async event => {
+
+        const message =
+            JSON.parse(event.data);
+
+        if (message.type === "host-online") {
+
+            status.textContent =
+                "Host found. Connecting...";
+        }
+
+        if (message.type === "host-offline") {
+
+            status.textContent =
+                "Host is offline.";
+        }
+
+        if (message.type === "signal") {
+
+            await handleSignal(message.data);
+        }
+    };
+
+    ws.onerror = () => {
+
+        status.textContent =
+            "Relay connection failed.";
+    };
+}
+
+function sendSignal(data) {
+
+    ws.send(JSON.stringify({
+        type: "signal",
+        data
+    }));
+}
+
+function createPeer() {
+
+    pc =
+        new RTCPeerConnection({
+            iceServers
+        });
+
+    pc.ontrack = event => {
+
+        remote.srcObject =
+            event.streams[0];
+
+        status.textContent =
+            "Connected to computer.";
+    };
+
+    pc.onicecandidate = event => {
+
+        if (event.candidate) {
+
+            sendSignal({
+                type: "candidate",
+                candidate: event.candidate
+            });
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+
+        status.textContent =
+            "WebRTC: " + pc.connectionState;
+    };
+}
+
+async function handleSignal(data) {
+
+    if (!pc) {
+        createPeer();
+    }
+
+    if (data.type === "offer") {
+
+        await pc.setRemoteDescription(
+            new RTCSessionDescription(data.sdp)
+        );
+
+        const answer =
+            await pc.createAnswer();
+
+        await pc.setLocalDescription(answer);
+
+        sendSignal({
+            type: "answer",
+            sdp: pc.localDescription
+        });
+
+        return;
+    }
+
+    if (data.type === "candidate") {
+
+        try {
+
+            await pc.addIceCandidate(
+                new RTCIceCandidate(data.candidate)
+            );
+
+        } catch (error) {
+
+            console.error(error);
+        }
+    }
+}
+
+connect();
+
+</script>
+
+</body>
+</html>
