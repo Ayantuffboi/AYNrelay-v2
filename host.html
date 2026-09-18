@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Relay Host</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="card">
+
+    <h1>Your computer</h1>
+
+    <p>Give this code to the other device:</p>
+
+    <div id="code" class="code">
+        Connecting...
+    </div>
+
+    <button id="shareButton">
+        Share screen
+    </button>
+
+    <p id="status">
+        Connecting to relay...
+    </p>
+
+    <video
+        id="preview"
+        autoplay
+        muted
+        playsinline
+    ></video>
+
+</div>
+
+<script>
+
+const RELAY =
+    "wss://my-relay.ayan6-4.workers.dev";
+
+const code =
+    prompt("Enter an 8-character code for this computer:");
+
+if (!code || code.length !== 8) {
+
+    document.getElementById("status").textContent =
+        "You need an 8-character code.";
+
+    throw new Error("Invalid code.");
+}
+
+document.getElementById("code").textContent = code;
+
+let ws;
+
+let pc = null;
+
+let stream = null;
+
+const iceServers = [
+    {
+        urls: [
+            "stun:stun.cloudflare.com:3478",
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302"
+        ]
+    }
+];
+
+function connectRelay() {
+
+    ws = new WebSocket(
+        RELAY + "?code=" +
+        encodeURIComponent(code)
+    );
+
+    ws.onopen = () => {
+
+        document.getElementById("status").textContent =
+            "Connected to relay.";
+
+        ws.send(JSON.stringify({
+            type: "host-register",
+            hostId: crypto.randomUUID()
+        }));
+    };
+
+    ws.onmessage = async event => {
+
+        const message =
+            JSON.parse(event.data);
+
+        if (message.type === "client-online") {
+
+            document.getElementById("status").textContent =
+                "Client connected. Waiting for screen...";
+        }
+
+        if (message.type === "signal") {
+
+            await handleSignal(message.data);
+        }
+
+        if (message.type === "host-offline") {
+
+            document.getElementById("status").textContent =
+                "Relay disconnected.";
+        }
+    };
+
+    ws.onerror = () => {
+
+        document.getElementById("status").textContent =
+            "Relay connection failed.";
+    };
+}
+
+function sendSignal(data) {
+
+    ws.send(JSON.stringify({
+        type: "signal",
+        data
+    }));
+}
+
+async function createPeer() {
+
+    pc = new RTCPeerConnection({
+        iceServers
+    });
+
+    pc.onicecandidate = event => {
+
+        if (event.candidate) {
+            sendSignal({
+                type: "candidate",
+                candidate: event.candidate
+            });
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+
+        document.getElementById("status").textContent =
+            "WebRTC: " + pc.connectionState;
+    };
+
+    if (stream) {
+
+        for (const track of stream.getTracks()) {
+
+            pc.addTrack(track, stream);
+        }
+    }
+
+    const offer =
+        await pc.createOffer();
+
+    await pc.setLocalDescription(offer);
+
+    sendSignal({
+        type: "offer",
+        sdp: pc.localDescription
+    });
+}
+
+async function handleSignal(data) {
+
+    if (!pc) {
+        await createPeer();
+    }
+
+    if (data.type === "answer") {
+
+        await pc.setRemoteDescription(
+            new RTCSessionDescription(data.sdp)
+        );
+
+        return;
+    }
+
+    if (data.type === "candidate") {
+
+        try {
+
+            await pc.addIceCandidate(
+                new RTCIceCandidate(data.candidate)
+            );
+
+        } catch (error) {
+
+            console.error(error);
+        }
+    }
+}
+
+document.getElementById("shareButton").onclick =
+    async () => {
+
+        try {
+
+            stream =
+                await navigator.mediaDevices.getDisplayMedia({
+                    video: {
+                        frameRate: {
+                            ideal: 60,
+                            max: 60
+                        }
+                    },
+                    audio: true
+                });
+
+            document.getElementById("preview").srcObject =
+                stream;
+
+            document.getElementById("status").textContent =
+                "Screen captured.";
+
+            if (pc) {
+
+                for (const track of stream.getTracks()) {
+
+                    pc.addTrack(track, stream);
+                }
+
+                const offer =
+                    await pc.createOffer();
+
+                await pc.setLocalDescription(offer);
+
+                sendSignal({
+                    type: "offer",
+                    sdp: pc.localDescription
+                });
+            }
+
+        } catch (error) {
+
+            document.getElementById("status").textContent =
+                "Screen sharing was cancelled.";
+        }
+    };
+
+connectRelay();
+
+</script>
+
+</body>
+</html>
