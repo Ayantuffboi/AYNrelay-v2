@@ -1,252 +1,1028 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <title>Relay Host</title>
 
-    <link rel="stylesheet" href="style.css">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #0d1117;
+            color: white;
+            font-family: Arial, sans-serif;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            width: min(700px, 92vw);
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            color: #8b949e;
+            margin-bottom: 30px;
+        }
+
+        .code-box {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 25px;
+        }
+
+        .label {
+            color: #8b949e;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .code {
+            font-size: 48px;
+            font-weight: bold;
+            letter-spacing: 8px;
+            word-break: break-all;
+        }
+
+        button {
+            border: 0;
+            border-radius: 10px;
+            padding: 14px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin: 6px;
+        }
+
+        #startButton {
+            background: #238636;
+            color: white;
+        }
+
+        #startButton:hover {
+            background: #2ea043;
+        }
+
+        #stopButton {
+            background: #da3633;
+            color: white;
+            display: none;
+        }
+
+        .log {
+            margin-top: 25px;
+            padding: 15px;
+            background: #010409;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            text-align: left;
+            height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 13px;
+            color: #8b949e;
+        }
+
+        .connected {
+            color: #3fb950;
+        }
+
+        .warning {
+            color: #d29922;
+        }
+
+        video {
+            width: 100%;
+            max-height: 300px;
+            margin-top: 20px;
+            border-radius: 10px;
+            display: none;
+            background: black;
+        }
+    </style>
 </head>
 
 <body>
 
-<div class="card">
+<div class="container">
 
-    <h1>Your computer</h1>
+    <h1>Relay Host</h1>
 
-    <p>Give this code to the other device:</p>
-
-    <div id="code" class="code">
-        Connecting...
+    <div id="status" class="status">
+        Ready
     </div>
 
-    <button id="shareButton">
-        Share screen
+    <div class="code-box">
+
+        <div class="label">
+            YOUR 8-CHARACTER CODE
+        </div>
+
+        <div id="code" class="code">
+            --------
+        </div>
+
+    </div>
+
+    <button id="startButton">
+        Start Host
     </button>
 
-    <p id="status">
-        Connecting to relay...
-    </p>
+    <button id="stopButton">
+        Stop Host
+    </button>
 
-    <video
-        id="preview"
-        autoplay
-        muted
-        playsinline
-    ></video>
+    <video id="preview" autoplay muted playsinline></video>
+
+    <div id="log" class="log"></div>
 
 </div>
 
+
 <script>
 
-const RELAY =
-    "wss://new-relay.ayan6-4.workers.dev";
+    // =========================================================
+    // SETTINGS
+    // =========================================================
 
-const code =
-    prompt("Enter an 8-character code for this computer:");
+    const RELAY_URL =
+        "wss://my-relay.ayan6-4.workers.dev";
 
-if (!code || code.length !== 8) {
 
-    document.getElementById("status").textContent =
-        "You need an 8-character code.";
+    // =========================================================
+    // VARIABLES
+    // =========================================================
 
-    throw new Error("Invalid code.");
-}
+    let websocket = null;
 
-document.getElementById("code").textContent = code;
+    let peer = null;
 
-let ws;
+    let screenStream = null;
 
-let pc = null;
+    let code = null;
 
-let stream = null;
+    let running = false;
 
-const iceServers = [
-    {
-        urls: [
-            "stun:stun.cloudflare.com:3478",
-            "stun:stun.l.google.com:19302",
-            "stun:stun1.l.google.com:19302"
-        ]
+
+    // =========================================================
+    // ELEMENTS
+    // =========================================================
+
+    const codeElement =
+        document.getElementById("code");
+
+    const statusElement =
+        document.getElementById("status");
+
+    const startButton =
+        document.getElementById("startButton");
+
+    const stopButton =
+        document.getElementById("stopButton");
+
+    const preview =
+        document.getElementById("preview");
+
+    const logElement =
+        document.getElementById("log");
+
+
+    // =========================================================
+    // LOG
+    // =========================================================
+
+    function log(message) {
+
+        const line =
+            document.createElement("div");
+
+        line.textContent =
+            "[" + new Date().toLocaleTimeString() + "] "
+            + message;
+
+        logElement.appendChild(line);
+
+        logElement.scrollTop =
+            logElement.scrollHeight;
     }
-];
 
-function connectRelay() {
 
-    ws = new WebSocket(
-        RELAY + "?code=" +
-        encodeURIComponent(code)
+    // =========================================================
+    // STATUS
+    // =========================================================
+
+    function setStatus(message, connected = false) {
+
+        statusElement.textContent =
+            message;
+
+        statusElement.className =
+            connected
+                ? "status connected"
+                : "status";
+    }
+
+
+    // =========================================================
+    // GENERATE 8 CHARACTER CODE
+    // =========================================================
+
+    function generateCode() {
+
+        const characters =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+        let result = "";
+
+        for (let i = 0; i < 8; i++) {
+
+            result +=
+                characters[
+                    Math.floor(
+                        Math.random() *
+                        characters.length
+                    )
+                ];
+        }
+
+        return result;
+    }
+
+
+    // =========================================================
+    // WEBRTC SETTINGS
+    // =========================================================
+
+    const ICE_SERVERS = [
+
+        {
+            urls: [
+                "stun:stun.cloudflare.com:3478",
+                "stun:stun.l.google.com:19302",
+                "stun:stun1.l.google.com:19302"
+            ]
+        }
+
+    ];
+
+
+    // =========================================================
+    // START HOST
+    // =========================================================
+
+    startButton.addEventListener(
+        "click",
+        startHost
     );
 
-    ws.onopen = () => {
 
-        document.getElementById("status").textContent =
-            "Connected to relay.";
+    async function startHost() {
 
-        ws.send(JSON.stringify({
-            type: "host-register",
-            hostId: crypto.randomUUID()
-        }));
-    };
-
-    ws.onmessage = async event => {
-
-        const message =
-            JSON.parse(event.data);
-
-        if (message.type === "client-online") {
-
-            document.getElementById("status").textContent =
-                "Client connected. Waiting for screen...";
+        if (running) {
+            return;
         }
 
-        if (message.type === "signal") {
+        running = true;
 
-            await handleSignal(message.data);
-        }
+        startButton.style.display =
+            "none";
 
-        if (message.type === "host-offline") {
+        stopButton.style.display =
+            "inline-block";
 
-            document.getElementById("status").textContent =
-                "Relay disconnected.";
-        }
-    };
+        code =
+            generateCode();
 
-    ws.onerror = () => {
+        codeElement.textContent =
+            code;
 
-        document.getElementById("status").textContent =
-            "Relay connection failed.";
-    };
-}
-
-function sendSignal(data) {
-
-    ws.send(JSON.stringify({
-        type: "signal",
-        data
-    }));
-}
-
-async function createPeer() {
-
-    pc = new RTCPeerConnection({
-        iceServers
-    });
-
-    pc.onicecandidate = event => {
-
-        if (event.candidate) {
-            sendSignal({
-                type: "candidate",
-                candidate: event.candidate
-            });
-        }
-    };
-
-    pc.onconnectionstatechange = () => {
-
-        document.getElementById("status").textContent =
-            "WebRTC: " + pc.connectionState;
-    };
-
-    if (stream) {
-
-        for (const track of stream.getTracks()) {
-
-            pc.addTrack(track, stream);
-        }
-    }
-
-    const offer =
-        await pc.createOffer();
-
-    await pc.setLocalDescription(offer);
-
-    sendSignal({
-        type: "offer",
-        sdp: pc.localDescription
-    });
-}
-
-async function handleSignal(data) {
-
-    if (!pc) {
-        await createPeer();
-    }
-
-    if (data.type === "answer") {
-
-        await pc.setRemoteDescription(
-            new RTCSessionDescription(data.sdp)
+        setStatus(
+            "Starting..."
         );
 
-        return;
-    }
-
-    if (data.type === "candidate") {
+        log(
+            "Starting relay host."
+        );
 
         try {
 
-            await pc.addIceCandidate(
-                new RTCIceCandidate(data.candidate)
+            // -------------------------------------------------
+            // SCREEN CAPTURE
+            // -------------------------------------------------
+
+            log(
+                "Requesting screen sharing permission..."
             );
 
-        } catch (error) {
-
-            console.error(error);
-        }
-    }
-}
-
-document.getElementById("shareButton").onclick =
-    async () => {
-
-        try {
-
-            stream =
+            screenStream =
                 await navigator.mediaDevices.getDisplayMedia({
+
                     video: {
                         frameRate: {
                             ideal: 60,
                             max: 60
                         }
                     },
-                    audio: true
+
+                    audio: false
+
                 });
 
-            document.getElementById("preview").srcObject =
-                stream;
+            preview.srcObject =
+                screenStream;
 
-            document.getElementById("status").textContent =
-                "Screen captured.";
+            preview.style.display =
+                "block";
 
-            if (pc) {
+            log(
+                "Screen sharing started."
+            );
 
-                for (const track of stream.getTracks()) {
 
-                    pc.addTrack(track, stream);
-                }
+            // -------------------------------------------------
+            // IF USER STOPS SCREEN SHARING
+            // -------------------------------------------------
 
-                const offer =
-                    await pc.createOffer();
+            const videoTrack =
+                screenStream.getVideoTracks()[0];
 
-                await pc.setLocalDescription(offer);
+            if (videoTrack) {
 
-                sendSignal({
-                    type: "offer",
-                    sdp: pc.localDescription
-                });
+                videoTrack.addEventListener(
+                    "ended",
+                    stopHost
+                );
+
             }
+
+
+            // -------------------------------------------------
+            // CONNECT TO CLOUDFLARE
+            // -------------------------------------------------
+
+            log(
+                "Connecting to relay..."
+            );
+
+            websocket =
+                new WebSocket(
+                    RELAY_URL +
+                    "?code=" +
+                    encodeURIComponent(code)
+                );
+
+
+            websocket.addEventListener(
+                "open",
+                async () => {
+
+                    log(
+                        "Connected to relay."
+                    );
+
+                    setStatus(
+                        "Waiting for another device..."
+                    );
+
+                    // Register this browser as the host.
+                    websocket.send(
+                        JSON.stringify({
+                            type: "host-register",
+                            hostId: code
+                        })
+                    );
+
+                    log(
+                        "Host registered with code " +
+                        code
+                    );
+
+                }
+            );
+
+
+            websocket.addEventListener(
+                "message",
+                async event => {
+
+                    await handleRelayMessage(
+                        event.data
+                    );
+
+                }
+            );
+
+
+            websocket.addEventListener(
+                "close",
+                () => {
+
+                    log(
+                        "Relay connection closed."
+                    );
+
+                    if (running) {
+
+                        setStatus(
+                            "Relay disconnected."
+                        );
+
+                    }
+
+                }
+            );
+
+
+            websocket.addEventListener(
+                "error",
+                error => {
+
+                    console.error(
+                        error
+                    );
+
+                    log(
+                        "Relay connection error."
+                    );
+
+                    setStatus(
+                        "Relay error."
+                    );
+
+                }
+            );
+
 
         } catch (error) {
 
-            document.getElementById("status").textContent =
-                "Screen sharing was cancelled.";
-        }
-    };
+            console.error(
+                error
+            );
 
-connectRelay();
+            log(
+                "ERROR: " +
+                error.message
+            );
+
+            stopHost();
+
+        }
+
+    }
+
+
+    // =========================================================
+    // RELAY MESSAGE HANDLER
+    // =========================================================
+
+    async function handleRelayMessage(message) {
+
+        let data;
+
+        try {
+
+            data =
+                JSON.parse(message);
+
+        } catch {
+
+            log(
+                "Received invalid relay message."
+            );
+
+            return;
+
+        }
+
+
+        // -----------------------------------------------------
+        // CLIENT CONNECTED
+        // -----------------------------------------------------
+
+        if (
+            data.type ===
+            "client-online"
+        ) {
+
+            log(
+                "A client connected."
+            );
+
+            setStatus(
+                "Client connected. Preparing WebRTC..."
+            );
+
+            return;
+
+        }
+
+
+        // -----------------------------------------------------
+        // CLIENT READY
+        // -----------------------------------------------------
+
+        if (
+            data.type ===
+            "client-ready"
+        ) {
+
+            log(
+                "Client is ready."
+            );
+
+            await createPeerConnection();
+
+            return;
+
+        }
+
+
+        // -----------------------------------------------------
+        // SIGNAL
+        // -----------------------------------------------------
+
+        if (
+            data.type ===
+            "signal"
+        ) {
+
+            await handleSignal(
+                data.data
+            );
+
+            return;
+
+        }
+
+
+        // -----------------------------------------------------
+        // CLIENT DISCONNECTED
+        // -----------------------------------------------------
+
+        if (
+            data.type ===
+            "client-offline"
+        ) {
+
+            log(
+                "Client disconnected."
+            );
+
+            setStatus(
+                "Waiting for another device..."
+            );
+
+            if (peer) {
+
+                try {
+                    await peer.close();
+                } catch {}
+
+                peer = null;
+
+            }
+
+        }
+
+    }
+
+
+    // =========================================================
+    // CREATE PEER CONNECTION
+    // =========================================================
+
+    async function createPeerConnection() {
+
+        if (peer) {
+
+            try {
+                await peer.close();
+            } catch {}
+
+        }
+
+
+        peer =
+            new RTCPeerConnection({
+                iceServers:
+                    ICE_SERVERS
+            });
+
+
+        log(
+            "WebRTC connection created."
+        );
+
+
+        // -----------------------------------------------------
+        // ADD SCREEN TRACK
+        // -----------------------------------------------------
+
+        if (screenStream) {
+
+            for (
+                const track
+                of screenStream.getTracks()
+            ) {
+
+                peer.addTrack(
+                    track,
+                    screenStream
+                );
+
+            }
+
+        }
+
+
+        // -----------------------------------------------------
+        // CONTROL DATA CHANNEL
+        // -----------------------------------------------------
+
+        const controlChannel =
+            peer.createDataChannel(
+                "control",
+                {
+                    ordered: true
+                }
+            );
+
+
+        controlChannel.addEventListener(
+            "open",
+            () => {
+
+                log(
+                    "Control channel opened."
+                );
+
+            }
+        );
+
+
+        controlChannel.addEventListener(
+            "close",
+            () => {
+
+                log(
+                    "Control channel closed."
+                );
+
+            }
+        );
+
+
+        // -----------------------------------------------------
+        // CONNECTION STATE
+        // -----------------------------------------------------
+
+        peer.addEventListener(
+            "connectionstatechange",
+            () => {
+
+                log(
+                    "WebRTC state: " +
+                    peer.connectionState
+                );
+
+
+                if (
+                    peer.connectionState ===
+                    "connected"
+                ) {
+
+                    setStatus(
+                        "Connected!",
+                        true
+                    );
+
+                }
+
+
+                if (
+                    peer.connectionState ===
+                    "failed"
+                ) {
+
+                    setStatus(
+                        "WebRTC connection failed."
+                    );
+
+                }
+
+            }
+        );
+
+
+        // -----------------------------------------------------
+        // CREATE OFFER
+        // -----------------------------------------------------
+
+        log(
+            "Creating WebRTC offer..."
+        );
+
+        const offer =
+            await peer.createOffer();
+
+        await peer.setLocalDescription(
+            offer
+        );
+
+
+        // -----------------------------------------------------
+        // WAIT FOR ICE
+        // -----------------------------------------------------
+
+        await waitForIceGathering();
+
+
+        log(
+            "ICE gathering complete."
+        );
+
+
+        // -----------------------------------------------------
+        // SEND OFFER
+        // -----------------------------------------------------
+
+        sendSignal({
+
+            type: "offer",
+
+            sdp:
+                peer.localDescription.sdp
+
+        });
+
+
+        log(
+            "WebRTC offer sent."
+        );
+
+    }
+
+
+    // =========================================================
+    // WAIT FOR ICE
+    // =========================================================
+
+    function waitForIceGathering() {
+
+        if (
+            peer.iceGatheringState ===
+            "complete"
+        ) {
+
+            return Promise.resolve();
+
+        }
+
+
+        return new Promise(
+            resolve => {
+
+                const check =
+                    () => {
+
+                        if (
+                            peer.iceGatheringState ===
+                            "complete"
+                        ) {
+
+                            peer.removeEventListener(
+                                "icegatheringstatechange",
+                                check
+                            );
+
+                            resolve();
+
+                        }
+
+                    };
+
+
+                peer.addEventListener(
+                    "icegatheringstatechange",
+                    check
+                );
+
+            }
+        );
+
+    }
+
+
+    // =========================================================
+    // HANDLE SIGNAL
+    // =========================================================
+
+    async function handleSignal(data) {
+
+        if (!data) {
+            return;
+        }
+
+
+        // -----------------------------------------------------
+        // ANSWER
+        // -----------------------------------------------------
+
+        if (
+            data.type ===
+            "answer"
+        ) {
+
+            if (!peer) {
+                return;
+            }
+
+            log(
+                "Answer received."
+            );
+
+            await peer.setRemoteDescription({
+
+                type: "answer",
+
+                sdp: data.sdp
+
+            });
+
+
+            log(
+                "Remote description set."
+            );
+
+            return;
+
+        }
+
+
+        // -----------------------------------------------------
+        // ICE CANDIDATE
+        // -----------------------------------------------------
+
+        if (
+            data.type ===
+            "candidate"
+        ) {
+
+            if (!peer) {
+                return;
+            }
+
+            try {
+
+                await peer.addIceCandidate(
+                    data.candidate
+                );
+
+            } catch (error) {
+
+                console.warn(
+                    "ICE candidate error:",
+                    error
+                );
+
+            }
+
+        }
+
+    }
+
+
+    // =========================================================
+    // SEND SIGNAL
+    // =========================================================
+
+    function sendSignal(data) {
+
+        if (
+            !websocket ||
+            websocket.readyState !==
+            WebSocket.OPEN
+        ) {
+
+            log(
+                "Cannot send signal: relay not connected."
+            );
+
+            return;
+
+        }
+
+
+        websocket.send(
+            JSON.stringify({
+
+                type: "signal",
+
+                data: data
+
+            })
+        );
+
+    }
+
+
+    // =========================================================
+    // STOP HOST
+    // =========================================================
+
+    stopButton.addEventListener(
+        "click",
+        stopHost
+    );
+
+
+    function stopHost() {
+
+        running = false;
+
+
+        if (peer) {
+
+            try {
+                peer.close();
+            } catch {}
+
+            peer = null;
+
+        }
+
+
+        if (websocket) {
+
+            try {
+                websocket.close();
+            } catch {}
+
+            websocket = null;
+
+        }
+
+
+        if (screenStream) {
+
+            for (
+                const track
+                of screenStream.getTracks()
+            ) {
+
+                track.stop();
+
+            }
+
+            screenStream = null;
+
+        }
+
+
+        preview.srcObject =
+            null;
+
+        preview.style.display =
+            "none";
+
+
+        codeElement.textContent =
+            "--------";
+
+
+        startButton.style.display =
+            "inline-block";
+
+        stopButton.style.display =
+            "none";
+
+
+        setStatus(
+            "Ready"
+        );
+
+
+        log(
+            "Host stopped."
+        );
+
+    }
+
 
 </script>
 
