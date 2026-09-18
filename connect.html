@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Connect</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="connect-page">
+
+    <div id="login" class="card">
+
+        <h1>Connect to PC</h1>
+
+        <p>Enter the 8-character code shown on the PC.</p>
+
+        <input
+            id="code"
+            maxlength="8"
+            placeholder="XXXXXXXX"
+            autocomplete="off"
+            spellcheck="false"
+        >
+
+        <button id="connect">
+            Connect
+        </button>
+
+        <p id="status"></p>
+
+    </div>
+
+    <div id="viewer" class="viewer hidden">
+
+        <video
+            id="screen"
+            autoplay
+            playsinline
+        ></video>
+
+        <div class="toolbar">
+
+            <span id="connectionStatus">
+                Connecting...
+            </span>
+
+            <button id="fullscreen">
+                Fullscreen
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+<script src="client.js"></script>
+
+</body>
+</html>
